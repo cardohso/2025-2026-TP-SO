@@ -28,7 +28,7 @@ static void print_menu(void){
     puts("2) Cancelar serviço - cancelar <id>");
     puts("3) Consultar serviços - consultar");
     puts("4) Entrar no veículo - entrar <destino>");
-    puts("5) Sair do veículo");
+    puts("5) Sair do veículo - sair");
     puts("q) Sair(terminar programa) - terminar");
 }
 
@@ -148,7 +148,7 @@ int main(int argc, char *argv[]){
 
         if(*p == '\n' || *p == '\0') continue; /* empty */
 
-        if(strncasecmp(p, "agendar", 7) == 0 || p){
+        if(strncasecmp(p, "agendar", 7) == 0){
             handle_agendar(fdServidor, argv[1], p);
             continue;
         }
