@@ -12,6 +12,8 @@
 #include <pthread.h>
 #include <errno.h>
 
+#include "../include/common.h"
+
 #define SERVER_FIFO "FIFOSERVIDOR"
 #define CLIENT_FIFO "FIFOCLIENTE%d"
 
@@ -31,21 +33,72 @@ static void print_menu(void){
 }
 
 /* Stub handlers - replace with IPC/send message code */
-static void handle_agendar(void){ puts("[Agendar] (stub) - implementar envio de pedido ao controlador"); }
-static void handle_consultar(void){ puts("[Consultar] (stub) - implementar pedido de consulta"); }
-static void handle_cancelar(void){ puts("[Cancelar] (stub) - implementar pedido de cancelamento"); }
-static void handle_entrar(void){ puts("[Entrar] (stub) - implementar sinal de entrada no veículo"); }
-static void handle_sair(void){ puts("[Sair] (stub) - implementar sinal de saída do veículo"); }
+static void handle_agendar(int fd, const char *username, const char *cmd){
+    MensagemT msg;
+    msg.pid = getpid();
+    strncpy(msg.param2, username, TAM_USERNAME);
+    strcpy(msg.comando, "agendar");
+
+    char hora[30], local[100], distancia[30];
+    if (sscanf(cmd, "agendar %s %s %s", hora, local, distancia) != 3) {
+        puts("Formato inválido. Use: agendar <hora> <local> <distancia>");
+        return;
+    }
+    snprintf(msg.msg, MAX_MSG, "%s %s %s", hora, local, distancia);
+
+    write(fd, &msg, sizeof(MensagemT));
+    puts("[Agendar] Pedido de agendamento enviado.");
+}
+static void handle_consultar(int fd, const char *username){
+    MensagemT msg;
+    msg.pid = getpid();
+    strncpy(msg.param2, username, TAM_USERNAME);
+    strcpy(msg.comando, "consultar");
+    msg.msg[0] = '\0'; 
+
+    write(fd, &msg, sizeof(MensagemT));
+    puts("[Consultar] Pedido de consulta enviado.");
+}
+static void handle_cancelar(int fd, const char *username, const char *cmd){
+    MensagemT msg;
+    msg.pid = getpid();
+    strncpy(msg.param2, username, TAM_USERNAME);
+    strcpy(msg.comando, "cancelar");
+
+    if (sscanf(cmd, "cancelar %s", msg.msg) != 1) {
+        puts("Formato inválido. Use: cancelar <id>");
+        return;
+    }
+
+    write(fd, &msg, sizeof(MensagemT));
+    puts("[Cancelar] Pedido de cancelamento enviado.");
+}
+static void handle_entrar(int fd, const char *username, const char *cmd){
+    MensagemT msg;
+    msg.pid = getpid();
+    strncpy(msg.param2, username, TAM_USERNAME);
+    strcpy(msg.comando, "entrar");
+
+    if (sscanf(cmd, "entrar %s", msg.msg) != 1) {
+        puts("Formato inválido. Use: entrar <destino>");
+        return;
+    }
+
+    write(fd, &msg, sizeof(MensagemT));
+    puts("[Entrar] Pedido de entrada no veículo enviado.");
+}
+static void handle_sair(int fd, const char *username){
+    MensagemT msg;
+    msg.pid = getpid();
+    strncpy(msg.param2, username, TAM_USERNAME);
+    strcpy(msg.comando, "sair");
+    msg.msg[0] = '\0';
+
+    write(fd, &msg, sizeof(MensagemT));
+    puts("[Sair] Pedido de saída do veículo enviado.");
+}
 
 char CLIENT_FIFO_FINAL[100];
-
-typedef struct {
-    pid_t pid;
-    char param2[TAM_USERNAME]; //username
-    char comando[30];
-    int temp;
-    char msg[MAX_MSG];              
-} MensagemT;
 
 void handler_sigint(int sig, siginfo_t *info, void *s) {
     printf("\nClosing client...\n");
@@ -95,24 +148,24 @@ int main(int argc, char *argv[]){
 
         if(*p == '\n' || *p == '\0') continue; /* empty */
 
-        if(strncasecmp(p, "agendar", 7) == 0){
-            handle_agendar();
+        if(strncasecmp(p, "agendar", 7) == 0 || p){
+            handle_agendar(fdServidor, argv[1], p);
             continue;
         }
         if(strncasecmp(p, "cancelar", 8) == 0){
-            handle_cancelar();
+            handle_cancelar(fdServidor, argv[1], p);
             continue;
         }
         if(strncasecmp(p, "consultar", 9) == 0){
-            handle_consultar();
+            handle_consultar(fdServidor, argv[1]);
             continue;
         }
         if(strncasecmp(p, "entrar", 6) == 0){
-            handle_entrar();
+            handle_entrar(fdServidor, argv[1], p);
             continue;
         }
         if(strncasecmp(p, "sair", 4) == 0){
-            handle_sair();
+            handle_sair(fdServidor, argv[1]);
             continue;
         }
         if(p[0] == 'q' || strncasecmp(p, "terminar", 8) == 0){
@@ -120,7 +173,7 @@ int main(int argc, char *argv[]){
             break;
         }
 
-        puts("Opção inválida. Por favor escolha 1-5 ou 'q' para sair.");
+        puts("Opção inválida. Tente novamente.");
     }
 
     return 0;
