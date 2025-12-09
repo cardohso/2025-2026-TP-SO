@@ -14,41 +14,46 @@
 
 #include "../include/common.h"
 
-#define SERVER_FIFO "FIFOSERVIDOR"
-#define CLIENT_FIFO "FIFOCLIENTE%d"
-
-#define MAX_MSG 300
-#define TAM_USERNAME 20
-#define MAX_CLIENTES 10
+// Global variables for pipe management
+char CLIENT_FIFO_FINAL[100];
+pthread_t receive_thread_id; 
+int fdServidor = -1; // Global FD for the Server's FIFO
 
 /* Helper: print menu */
 static void print_menu(void){
-    puts("\n=== Cliente (menu) ===");
-    puts("1) Agendar serviço - agendar <hora> <local> <distancia>");
-    puts("2) Cancelar serviço - cancelar <id>");
-    puts("3) Consultar serviços - consultar");
-    puts("4) Entrar no veículo - entrar <destino>");
-    puts("5) Sair do veículo - sair");
-    puts("q) Sair(terminar programa) - terminar");
+    puts("\n=== Client (Menu) ===");
+    puts("1) Schedule service - agendar <hour> <location> <distance>");
+    puts("2) Cancel service - cancelar <id>");
+    puts("3) Consult services - consultar");
+    puts("4) Enter vehicle - entrar <destination>");
+    puts("5) Exit vehicle - sair");
+    puts("q) Quit program - terminar");
 }
 
-/* Stub handlers - replace with IPC/send message code */
+// --- COMMAND HANDLERS (Write to Server FIFO) ---
+
+/* 1) Schedule service */
 static void handle_agendar(int fd, const char *username, const char *cmd){
     MensagemT msg;
     msg.pid = getpid();
     strncpy(msg.param2, username, TAM_USERNAME);
     strcpy(msg.comando, "agendar");
 
-    char hora[30], local[100], distancia[30];
-    if (sscanf(cmd, "agendar %s %s %s", hora, local, distancia) != 3) {
-        puts("Formato inválido. Use: agendar <hora> <local> <distancia>");
+    // Correct parsing: requires command + 3 arguments
+    char temp_cmd[30], hora[30], local[100], distancia[30];
+    if (sscanf(cmd, "%s %s %s %s", temp_cmd, hora, local, distancia) != 4) {
+        puts("Invalid format. Use: agendar <hour> <location> <distance>");
         return;
     }
+    
     snprintf(msg.msg, MAX_MSG, "%s %s %s", hora, local, distancia);
+    msg.msg[MAX_MSG-1] = '\0'; 
 
     write(fd, &msg, sizeof(MensagemT));
-    puts("[Agendar] Pedido de agendamento enviado.");
+    puts("[Schedule] Scheduling request sent.");
 }
+
+/* 3) Consult services */
 static void handle_consultar(int fd, const char *username){
     MensagemT msg;
     msg.pid = getpid();
@@ -57,36 +62,50 @@ static void handle_consultar(int fd, const char *username){
     msg.msg[0] = '\0'; 
 
     write(fd, &msg, sizeof(MensagemT));
-    puts("[Consultar] Pedido de consulta enviado.");
+    puts("[Consult] Consultation request sent.");
 }
+
+/* 2) Cancel service */
 static void handle_cancelar(int fd, const char *username, const char *cmd){
     MensagemT msg;
     msg.pid = getpid();
     strncpy(msg.param2, username, TAM_USERNAME);
     strcpy(msg.comando, "cancelar");
 
-    if (sscanf(cmd, "cancelar %s", msg.msg) != 1) {
-        puts("Formato inválido. Use: cancelar <id>");
+    char temp_cmd[30], id_str[30];
+    if (sscanf(cmd, "%s %s", temp_cmd, id_str) != 2) {
+        puts("Invalid format. Use: cancelar <id>");
         return;
     }
+    
+    strncpy(msg.msg, id_str, MAX_MSG);
+    msg.msg[MAX_MSG-1] = '\0';
 
     write(fd, &msg, sizeof(MensagemT));
-    puts("[Cancelar] Pedido de cancelamento enviado.");
+    puts("[Cancel] Cancellation request sent.");
 }
+
+/* 4) Enter vehicle */
 static void handle_entrar(int fd, const char *username, const char *cmd){
     MensagemT msg;
     msg.pid = getpid();
     strncpy(msg.param2, username, TAM_USERNAME);
     strcpy(msg.comando, "entrar");
 
-    if (sscanf(cmd, "entrar %s", msg.msg) != 1) {
-        puts("Formato inválido. Use: entrar <destino>");
+    char temp_cmd[30], destino[MAX_MSG];
+    if (sscanf(cmd, "%s %s", temp_cmd, destino) != 2) {
+        puts("Invalid format. Use: entrar <destination>");
         return;
     }
 
+    strncpy(msg.msg, destino, MAX_MSG);
+    msg.msg[MAX_MSG-1] = '\0';
+
     write(fd, &msg, sizeof(MensagemT));
-    puts("[Entrar] Pedido de entrada no veículo enviado.");
+    puts("[Enter] Vehicle entry request sent.");
 }
+
+/* 5) Exit vehicle */
 static void handle_sair(int fd, const char *username){
     MensagemT msg;
     msg.pid = getpid();
@@ -95,59 +114,131 @@ static void handle_sair(int fd, const char *username){
     msg.msg[0] = '\0';
 
     write(fd, &msg, sizeof(MensagemT));
-    puts("[Sair] Pedido de saída do veículo enviado.");
+    puts("[Exit] Vehicle exit request sent.");
 }
 
-char CLIENT_FIFO_FINAL[100];
+// --- RECEIVING THREAD (Reads from Client FIFO) ---
+
+void *receive_thread(void *arg) {
+    // Open its own FIFO for Read/Write (O_RDWR) to prevent open() from blocking, 
+    // ensuring the thread starts immediately.
+    int fd_cliente = open(CLIENT_FIFO_FINAL, O_RDWR);
+    if (fd_cliente == -1) {
+        perror("Error opening client FIFO for reading/writing");
+        return NULL;
+    }
+
+    MensagemT msg;
+    while (1) {
+        ssize_t bytes_read = read(fd_cliente, &msg, sizeof(MensagemT));
+        
+        if (bytes_read > 0) {
+            printf("\n[Server/Vehicle]: %s\n", msg.msg);
+
+            // Exit if login failed or if server forces disconnection
+            if (strncmp(msg.msg, "Login failed", 12) == 0) {
+                close(fd_cliente);
+                unlink(CLIENT_FIFO_FINAL);
+                exit(1); 
+            }
+
+            // Re-print prompt to guide the user after interruption
+            printf("Opção> ");
+            fflush(stdout);
+        } else if (bytes_read == 0) {
+            // EOF: The writing end was closed (Controller terminated)
+            printf("\n[ATTENTION] Server connection lost (FIFO closed).\n");
+            break; 
+        } else if (bytes_read == -1 && errno != EINTR) {
+            perror("Error reading client FIFO");
+            break;
+        }
+    }
+    close(fd_cliente);
+    return NULL;
+}
+
+// --- CLEANUP AND EXIT FUNCTIONS ---
 
 void handler_sigint(int sig, siginfo_t *info, void *s) {
-    printf("\nClosing client...\n");
-    unlink(CLIENT_FIFO_FINAL); // usar pipes para tirar do manager
+    printf("\nClosing client via SIGINT...\n");
+
+    // Send 'terminar' message to the server if possible
+    if (fdServidor != -1) {
+        MensagemT logout_msg;
+        logout_msg.pid = getpid();
+        strcpy(logout_msg.comando, "terminar"); 
+        write(fdServidor, &logout_msg, sizeof(MensagemT));
+        close(fdServidor);
+    }
+
+    unlink(CLIENT_FIFO_FINAL);
     exit(0);
 }
 
 int main(int argc, char *argv[]){
     if (argc != 2) {
-        fprintf(stderr, "Uso: %s <username>\n", argv[0]);
+        fprintf(stderr, "Usage: %s <username>\n", argv[0]);
         return 1;
     }
     printf("My PID [%d]\n", getpid());
 
-    struct sigaction sa;                
+    // 1. SIGINT Configuration
+    struct sigaction sa;                 
     sa.sa_sigaction = handler_sigint; 
     sa.sa_flags = SA_RESTART | SA_SIGINFO;
     sigaction(SIGINT, &sa, NULL);
 
-    // Criar o FIFO do cliente
+    // 2. Client FIFO Creation
     sprintf(CLIENT_FIFO_FINAL, CLIENT_FIFO, getpid());
     if (mkfifo(CLIENT_FIFO_FINAL, 0777) == -1 && errno != EEXIST) {
-        perror("Erro ao criar o FIFO do cliente");
+        perror("Error creating client FIFO");
         return 1;
     }
 
-    // Abrir o FIFO do servidor para enviar o login
-    int fdServidor = open(SERVER_FIFO, O_WRONLY);
+    // 3. Server FIFO Opening (O_WRONLY)
+    fdServidor = open(SERVER_FIFO, O_WRONLY);
     if (fdServidor == -1) {
-        perror("Erro ao abrir o FIFO do servidor");
+        perror("Error opening server FIFO. Is the controller running?");
+        unlink(CLIENT_FIFO_FINAL);
+        return 1;
+    }
+    printf("Connection to server established. Client FIFO: %s\n", CLIENT_FIFO_FINAL);
+
+
+    // 4. Send Login Message
+    MensagemT login_msg;
+    login_msg.pid = getpid();
+    strncpy(login_msg.param2, argv[1], TAM_USERNAME);
+    strcpy(login_msg.comando, "login");
+    login_msg.msg[0] = '\0';
+    write(fdServidor, &login_msg, sizeof(MensagemT));
+
+    // 5. Launch Receiving Thread (Asynchronous reading)
+    if (pthread_create(&receive_thread_id, NULL, receive_thread, NULL) != 0) {
+        perror("Error creating receiving thread");
+        close(fdServidor);
         unlink(CLIENT_FIFO_FINAL);
         return 1;
     }
 
     char input[128];
 
+    // 6. Main Loop (Command sending)
     for(;;){
         print_menu();
         printf("Opção> ");
         if(!fgets(input, sizeof input, stdin)){
             putchar('\n');
-            break;
+            break; 
         }
 
         char *p = input;
         while(*p == ' ' || *p == '\t') p++;
 
-        if(*p == '\n' || *p == '\0') continue; /* empty */
+        if(*p == '\n' || *p == '\0') continue; 
 
+        // Correct command dispatch logic (handles only the prefix)
         if(strncasecmp(p, "agendar", 7) == 0){
             handle_agendar(fdServidor, argv[1], p);
             continue;
@@ -169,12 +260,22 @@ int main(int argc, char *argv[]){
             continue;
         }
         if(p[0] == 'q' || strncasecmp(p, "terminar", 8) == 0){
-            puts("A sair...");
+            // Send 'terminar' message (logout) before closing
+            MensagemT logout_msg;
+            logout_msg.pid = getpid();
+            strcpy(logout_msg.comando, "terminar");
+            write(fdServidor, &logout_msg, sizeof(MensagemT));
+            puts("Exiting...");
             break;
         }
 
-        puts("Opção inválida. Tente novamente.");
+        puts("Invalid option. Try again.");
     }
+
+    // Final cleanup (main thread)
+    // pthread_join(receive_thread_id, NULL); // Ideally, join the thread
+    close(fdServidor);
+    unlink(CLIENT_FIFO_FINAL); 
 
     return 0;
 }

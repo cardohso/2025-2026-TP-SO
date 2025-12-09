@@ -5,14 +5,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <string.h>
-#include <strings.h>
-#include <sys/select.h>
-#include <signal.h>
-#include <pthread.h>
-#include <errno.h>
 
 #define SERVER_FIFO "FIFOSERVIDOR"
 #define CLIENT_FIFO "FIFOCLIENTE%d"
@@ -21,12 +13,12 @@
 #define TAM_USERNAME 20
 #define MAX_CLIENTES 10
 
+// Message Structure for IPC between Client <-> Controller
 typedef struct {
     pid_t pid;
-    char param2[TAM_USERNAME]; //username
-    char comando[30];
-    int temp;
-    char msg[MAX_MSG];              
+    char param2[TAM_USERNAME]; // Used for Username
+    char comando[30];          // Ex: login, agendar, cancelar, terminar
+    char msg[MAX_MSG];         // Command arguments or server response content
 } MensagemT;
 
 #endif // COMMON_H
