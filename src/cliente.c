@@ -121,7 +121,7 @@ static void handle_sair(int fd, const char *username){
 
 void *receive_thread(void *arg) {
     // Open its own FIFO for Read/Write (O_RDWR) to prevent open() from blocking, 
-    // ensuring the thread starts immediately.
+    // which is the standard technique used to manage FIFOs for a permanent process.
     int fd_cliente = open(CLIENT_FIFO_FINAL, O_RDWR);
     if (fd_cliente == -1) {
         perror("Error opening client FIFO for reading/writing");
@@ -130,6 +130,7 @@ void *receive_thread(void *arg) {
 
     MensagemT msg;
     while (1) {
+        // This is a blocking read, allowing the thread to wait without active polling.
         ssize_t bytes_read = read(fd_cliente, &msg, sizeof(MensagemT));
         
         if (bytes_read > 0) {
@@ -146,7 +147,7 @@ void *receive_thread(void *arg) {
             printf("Opção> ");
             fflush(stdout);
         } else if (bytes_read == 0) {
-            // EOF: The writing end was closed (Controller terminated)
+            // EOF: The writing end was closed (Controller terminated).
             printf("\n[ATTENTION] Server connection lost (FIFO closed).\n");
             break; 
         } else if (bytes_read == -1 && errno != EINTR) {
@@ -199,7 +200,7 @@ int main(int argc, char *argv[]){
     // 3. Server FIFO Opening (O_WRONLY)
     fdServidor = open(SERVER_FIFO, O_WRONLY);
     if (fdServidor == -1) {
-        perror("Error opening server FIFO. Is the controller running?");
+        fprintf(stderr, "Error opening server FIFO. Is the controller running?\n");
         unlink(CLIENT_FIFO_FINAL);
         return 1;
     }
@@ -238,7 +239,7 @@ int main(int argc, char *argv[]){
 
         if(*p == '\n' || *p == '\0') continue; 
 
-        // Correct command dispatch logic (handles only the prefix)
+        // Correct command dispatch logic 
         if(strncasecmp(p, "agendar", 7) == 0){
             handle_agendar(fdServidor, argv[1], p);
             continue;
@@ -273,7 +274,6 @@ int main(int argc, char *argv[]){
     }
 
     // Final cleanup (main thread)
-    // pthread_join(receive_thread_id, NULL); // Ideally, join the thread
     close(fdServidor);
     unlink(CLIENT_FIFO_FINAL); 
 

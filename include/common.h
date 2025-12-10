@@ -13,7 +13,7 @@
 #define TAM_USERNAME 20
 #define MAX_CLIENTES 10
 
-// Message Structure for IPC between Client <-> Controller
+// Message Structure for IPC between processes
 typedef struct {
     pid_t pid;
     char param2[TAM_USERNAME]; // Used for Username
