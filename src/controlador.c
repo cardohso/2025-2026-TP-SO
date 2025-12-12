@@ -105,6 +105,20 @@ void cleanup(int signo) {
         }
     }
     pthread_mutex_unlock(&clientes_mutex);
+    
+    // 1.5. Scan for and remove any leftover FIFOCLIENTE files
+    printf("[CLEANUP] Scanning for leftover client FIFOs...\n");
+    for (int i = 1; i < 100000; i++) { // Check a reasonable range of PIDs
+        char client_fifo_name[100];
+        sprintf(client_fifo_name, CLIENT_FIFO, i);
+        
+        // Check if FIFO exists using access()
+        if (access(client_fifo_name, F_OK) == 0) {
+            if (unlink(client_fifo_name) == 0) {
+                printf("[CLEANUP] Removed leftover FIFO: %s\n", client_fifo_name);
+            }
+        }
+    }
 
     // 2. Terminate all running vehicles
     pthread_mutex_lock(&frota_mutex);
@@ -310,7 +324,7 @@ void *admin_input_thread(void *arg) {
     pthread_detach(pthread_self());
     char input[128];
     
-    printf("Admin Console Ready. Use 'terminar', 'listar', 'frota', 'km', 'hora'.\n");
+    printf("Admin Console Ready. Use 'listar', 'frota', 'km', 'hora', 'terminar'.\n");
     
     while (1) {
         printf("Admin> ");
@@ -544,7 +558,7 @@ void *thread_process_message(void *arg) {
             
             // Find free service slot (must be called inside lock)
             ServicoEmCurso *new_service = NULL;
-            for (int i = 0; i < MAX_CLIENTES; i++) {
+            for (int i = 0; i < NVEICULOS; i++) {
                 if (frota[i].estado == 2) { // 2 = Concluded/Free
                     new_service = &frota[i];
                     break;

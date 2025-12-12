@@ -12,6 +12,7 @@
 #define MAX_MSG 300
 #define TAM_USERNAME 20
 #define MAX_CLIENTES 10
+#define NVEICULOS 5
 
 // Message Structure for IPC between processes
 typedef struct {
