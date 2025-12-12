@@ -58,6 +58,9 @@ int fd_servidor_main = -1;
 // File descriptor for the administration console (stdin)
 int fd_admin_input = 0; // stdin file descriptor is 0
 
+// --- Lock File Descriptor to ensure single instance ---
+int lock_fd = -1;
+
 // --- Control flag for main loop ---
 volatile sig_atomic_t keep_running = 1;
 
@@ -145,6 +148,12 @@ void cleanup(int signo) {
         fd_servidor_main = -1;
     }
     unlink(SERVER_FIFO);
+    
+    // 3.5. Release lock file
+    if (lock_fd != -1) {
+        close(lock_fd);
+        unlink(LOCK_FILE);
+    }
     
     // 4. Destroy mutexes
     pthread_mutex_destroy(&clientes_mutex);
@@ -556,34 +565,47 @@ void *thread_process_message(void *arg) {
             // CRITICAL: Lock order is clientes_mutex THEN frota_mutex (if needed)
             pthread_mutex_lock(&frota_mutex);
             
-            // Find free service slot (must be called inside lock)
-            ServicoEmCurso *new_service = NULL;
-            for (int i = 0; i < NVEICULOS; i++) {
-                if (frota[i].estado == 2) { // 2 = Concluded/Free
-                    new_service = &frota[i];
-                    break;
-                }
-            }
+            int requested_hour = atoi(hora_str);
             
-            if (new_service) {
-                // Register new service
-                new_service->id_servico = rand() % 1000 + 1; // Simple ID generation
-                new_service->pid_cliente = msg->pid;
-                new_service->hora_inicio = atoi(hora_str);
-                new_service->distancia_total = atoi(distancia_str);
-                new_service->estado = 0; // Scheduled
-                num_servicos_ativos++;
-                
-                printf("[AGENDAR] New service %d scheduled for H%d, %d km (Client: %s).\n", 
-                       new_service->id_servico, new_service->hora_inicio, new_service->distancia_total, msg->param2);
-                
-                char response_msg[MAX_MSG];
-                snprintf(response_msg, MAX_MSG, "Service ID %d scheduled successfully for H%d.", new_service->id_servico, new_service->hora_inicio);
-                send_client_response(msg->pid, response_msg);
+            // Check if the requested hour has already passed
+            if (requested_hour < current_simulated_time) {
+                pthread_mutex_unlock(&frota_mutex);
+                char error_msg[MAX_MSG];
+                snprintf(error_msg, MAX_MSG, "ERROR: Cannot schedule for H%d. Current time is H%d. Please schedule for a future time.", 
+                         requested_hour, current_simulated_time);
+                send_client_response(msg->pid, error_msg);
+                printf("[AGENDAR REJECTED] Client PID %d tried to schedule for past time H%d (current: H%d).\n", 
+                       msg->pid, requested_hour, current_simulated_time);
             } else {
-                send_client_response(msg->pid, "ERROR: Cannot schedule. Fleet is full or max services reached.");
+                // Find free service slot (must be called inside lock)
+                ServicoEmCurso *new_service = NULL;
+                for (int i = 0; i < MAX_CLIENTES; i++) {
+                    if (frota[i].estado == 2) { // 2 = Concluded/Free
+                        new_service = &frota[i];
+                        break;
+                    }
+                }
+                
+                if (new_service) {
+                    // Register new service
+                    new_service->id_servico = rand() % 1000 + 1; // Simple ID generation
+                    new_service->pid_cliente = msg->pid;
+                    new_service->hora_inicio = requested_hour;
+                    new_service->distancia_total = atoi(distancia_str);
+                    new_service->estado = 0; // Scheduled
+                    num_servicos_ativos++;
+                    
+                    printf("[AGENDAR] New service %d scheduled for H%d, %d km (Client: %s).\n", 
+                           new_service->id_servico, new_service->hora_inicio, new_service->distancia_total, msg->param2);
+                    
+                    char response_msg[MAX_MSG];
+                    snprintf(response_msg, MAX_MSG, "Service ID %d scheduled successfully for H%d.", new_service->id_servico, new_service->hora_inicio);
+                    send_client_response(msg->pid, response_msg);
+                } else {
+                    send_client_response(msg->pid, "ERROR: Cannot schedule. Fleet is full or max services reached.");
+                }
+                pthread_mutex_unlock(&frota_mutex);
             }
-            pthread_mutex_unlock(&frota_mutex);
         } else {
              send_client_response(msg->pid, "ERROR: Incomplete scheduling data.");
         }
@@ -631,6 +653,22 @@ void *thread_process_message(void *arg) {
 // =========================================================
 
 int main() {
+    // 0. Ensure only one instance is running (lock mechanism)
+    lock_fd = open(LOCK_FILE, O_CREAT | O_RDWR, 0666);
+    if (lock_fd == -1) {
+        perror("Failed to create lock file");
+        exit(EXIT_FAILURE);
+    }
+    
+    // Try to acquire exclusive lock
+    if (lockf(lock_fd, F_TLOCK, 0) == -1) {
+        fprintf(stderr, "ERROR: Another instance of controlador is already running.\n");
+        close(lock_fd);
+        exit(EXIT_FAILURE);
+    }
+    
+    printf("Lock acquired. Starting controlador...\n");
+    
     // Initialization
     srand(time(NULL));
     for (int i = 0; i < MAX_CLIENTES; i++) {
@@ -700,6 +738,12 @@ int main() {
     // Cleanup on fatal loop break
     close(fd_servidor_main);
     unlink(SERVER_FIFO);
+    
+    if (lock_fd != -1) {
+        close(lock_fd);
+        unlink(LOCK_FILE);
+    }
+    
     pthread_mutex_destroy(&clientes_mutex);
     pthread_mutex_destroy(&frota_mutex);
     pthread_mutex_destroy(&console_mutex);

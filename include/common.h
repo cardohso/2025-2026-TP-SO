@@ -8,11 +8,12 @@
 
 #define SERVER_FIFO "FIFOSERVIDOR"
 #define CLIENT_FIFO "FIFOCLIENTE%d"
+#define LOCK_FILE "/tmp/controlador.lock"
 
 #define MAX_MSG 300
 #define TAM_USERNAME 20
 #define MAX_CLIENTES 10
-#define NVEICULOS 5
+#define NVEICULOS 10
 
 // Message Structure for IPC between processes
 typedef struct {
