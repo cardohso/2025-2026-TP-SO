@@ -138,9 +138,24 @@ void *receive_thread(void *arg) {
 
             // Exit if login failed or if server forces disconnection
             if (strncmp(msg.msg, "Login failed", 12) == 0) {
+                printf("Press ENTER to exit...\n");
+                fflush(stdout);
+                sleep(2); // Give user time to see the message
                 close(fd_cliente);
                 unlink(CLIENT_FIFO_FINAL);
-                exit(1); 
+                if (fdServidor != -1) close(fdServidor);
+                _exit(1); // Force immediate exit
+            }
+            
+            // Exit if server is shutting down
+            if (strstr(msg.msg, "shutting down") != NULL || strstr(msg.msg, "Goodbye") != NULL) {
+                printf("Exiting due to server shutdown...\n");
+                fflush(stdout);
+                sleep(1);
+                close(fd_cliente);
+                unlink(CLIENT_FIFO_FINAL);
+                if (fdServidor != -1) close(fdServidor);
+                _exit(0);
             }
 
             // Re-print prompt to guide the user after interruption
@@ -149,7 +164,11 @@ void *receive_thread(void *arg) {
         } else if (bytes_read == 0) {
             // EOF: The writing end was closed (Controller terminated).
             printf("\n[ATTENTION] Server connection lost (FIFO closed).\n");
-            break; 
+            printf("Exiting...\n");
+            close(fd_cliente);
+            unlink(CLIENT_FIFO_FINAL);
+            if (fdServidor != -1) close(fdServidor);
+            _exit(0);
         } else if (bytes_read == -1 && errno != EINTR) {
             perror("Error reading client FIFO");
             break;

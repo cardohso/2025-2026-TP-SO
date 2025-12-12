@@ -15,7 +15,7 @@
 // Forward declaration
 void send_client_response(pid_t target_pid, const char *fifo_name, const char *message);
 
-// VARIÁVEIS GLOBAIS DE ESTADO
+// GLOBAL STATE VARIABLES (for SIGUSR1 handler)
 int keep_running = 1;
 int current_distance = 0;
 int total_distance = 0;
@@ -23,10 +23,10 @@ char client_fifo_name[100];
 pid_t client_pid = -1;
 
 // =========================================================
-// 1. HANDLER DE SINAL (SIGUSR1 - Cancelamento pelo Controlador)
+// 1. HANDLER DE SINAL (SIGUSR1 - Cancellation by Controller)
 // =========================================================
 
-/* Handler for SIGUSR1: Cancels the service and terminates immediately[cite: 455]. */
+/* Handler for SIGUSR1: Cancels the service and terminates immediately. */
 void handle_sigusr1(int sig) {
     // 1. Report cancellation to the Controller (Telemetry/stdout)
     fprintf(stdout, "TELEMETRY: SERVICE_CANCELLED | Reason: SIGUSR1 received | Dist_km: %d/%d\n",
@@ -36,15 +36,16 @@ void handle_sigusr1(int sig) {
     // 2. Notify the Client (via Named Pipe)
     send_client_response(client_pid, client_fifo_name, "Service cancelled by Controller.");
     
-    // 3. Terminate process immediately [cite: 455]
+    // 3. Terminate process immediately 
     exit(EXIT_SUCCESS); 
 }
 
-// --- Funções Auxiliares ---
+// --- Support Functions ---
 
 // Wrapper to send a message to the client's FIFO
 void send_client_response(pid_t target_pid, const char *fifo_name, const char *message) {
-    int fd = open(fifo_name, O_WRONLY);
+    // The client is expected to have its FIFO open for reading.
+    int fd = open(fifo_name, O_WRONLY | O_NONBLOCK);
     if (fd == -1) {
         // Client might have terminated; log the error but continue
         fprintf(stderr, "VEICULO [%d]: Warning: Failed to open Client FIFO %s: %s\n", 
@@ -63,39 +64,74 @@ void send_client_response(pid_t target_pid, const char *fifo_name, const char *m
 }
 
 // =========================================================
-// 2. COMUNICAÇÃO COM O CLIENTE (Named Pipe)
+// 2. CLIENT INTERACTION
 // =========================================================
 
-/* Simulates vehicle arrival and awaits 'entrar' command from the client */
+/* Blocks and waits for client's 'entrar' or 'sair' command via the server FIFO */
 int await_client_entry(const char *local_partida) {
     // 1. Notify Client of Arrival
     send_client_response(client_pid, client_fifo_name, "VEICULO: Arrived at location. Please enter command (entrar <destination> or sair).");
 
-    fprintf(stdout, "TELEMETRY: WAITING_FOR_CLIENT | Location: %s\n", local_partida);
+    // Report arrival event to Controller (stdout)
+    fprintf(stdout, "TELEMETRY: ARRIVED_AT_START | Location: %s\n", local_partida);
     fflush(stdout);
 
-    // 2. Wait for Client Command (Simulated: requires a dedicated pipe listener)
-    // ---
-    // NOTE: A robust implementation requires a separate thread/select() to read commands 
-    // from a dedicated VEICULO_FIFO here while the main thread waits.
-    // For this simplified version, we assume the command will arrive eventually 
-    // and must be handled by the Controller's thread pool, which forwards it.
-    // Since the vehicle only needs to know 'entrar' (destination) and 'sair', 
-    // this interaction should ideally be implemented using a dedicated pipe for Vehicle commands.
+    // 2. Open the SERVER FIFO to read client's command
+    // The controller should redirect the client's entrar/sair command to us
+    // For direct communication, we'll read from a dedicated pipe or wait for signal
+    // ALTERNATIVE: Create a temporary FIFO for vehicle-client direct communication
     
-    // For now, we simulate success (client entry) and log the event.
+    char vehicle_fifo_name[100];
+    sprintf(vehicle_fifo_name, "FIFOVEICULO%d", getpid());
     
-    // After receiving 'entrar <destination>' via a pipe...
-    fprintf(stdout, "TELEMETRY: CLIENT_ENTERED\n");
+    // Create vehicle's temporary FIFO
+    if (mkfifo(vehicle_fifo_name, 0666) == -1 && errno != EEXIST) {
+        perror("Error creating vehicle FIFO");
+        return 0;
+    }
+    
+    // Notify controller about the vehicle FIFO
+    fprintf(stdout, "TELEMETRY: WAITING_FOR_CLIENT | FIFO: %s\n", vehicle_fifo_name);
     fflush(stdout);
-    return 1; // Success: Client entered
+    
+    // Open FIFO for reading (blocks until client opens for writing)
+    int fd_vehicle = open(vehicle_fifo_name, O_RDONLY);
+    if (fd_vehicle == -1) {
+        perror("Error opening vehicle FIFO");
+        unlink(vehicle_fifo_name);
+        return 0;
+    }
+    
+    // Read command from client
+    MensagemT cmd_msg;
+    ssize_t bytes_read = read(fd_vehicle, &cmd_msg, sizeof(MensagemT));
+    
+    close(fd_vehicle);
+    unlink(vehicle_fifo_name);
+    
+    if (bytes_read > 0) {
+        if (strcmp(cmd_msg.comando, "entrar") == 0) {
+            fprintf(stdout, "TELEMETRY: CLIENT_ENTERED | Destination: %s\n", cmd_msg.msg);
+            fflush(stdout);
+            send_client_response(client_pid, client_fifo_name, "VEICULO: Client entered. Starting trip...");
+            return 1;
+        } else if (strcmp(cmd_msg.comando, "sair") == 0) {
+            fprintf(stdout, "TELEMETRY: CLIENT_EXITED | Reason: Client refused entry\n");
+            fflush(stdout);
+            send_client_response(client_pid, client_fifo_name, "VEICULO: Client exited. Service cancelled.");
+            return 0;
+        }
+    }
+    
+    fprintf(stderr, "VEICULO [%d]: No valid command received from client.\n", getpid());
+    return 0;
 }
 
 // =========================================================
-// 3. LOOP DE VIAGEM (Simulação)
+// 3. TRIP SIMULATION
 // =========================================================
 
-/* Simulates the trip and reports progress every 10% [cite: 453] */
+/* Simulates the trip and reports progress every 10% */
 void start_trip() {
     int next_report_threshold = 0;
     
@@ -103,7 +139,7 @@ void start_trip() {
     fflush(stdout);
 
     while (keep_running && current_distance < total_distance) {
-        sleep(1); // Simulates 1 second of travel (1 km/s) [cite: 454]
+        sleep(1); // 1 unit of time = 1 km
         current_distance++;
 
         // Calculate current percentage
@@ -144,8 +180,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    // 2. Read Arguments
-    // Usage: ./veiculo <PID_Cliente> <FIFO_Cliente_Name> <Distancia_Total> <Local_Partida>
+    // 2. Read Arguments: <PID_Cliente> <FIFO_Cliente_Name> <Distancia_Total> <Local_Partida>
     if (argc != 5) {
         fprintf(stderr, "VEICULO: Usage: %s <PID_Client> <FIFO_Client_Name> <Total_Distance> <Start_Location>\n", argv[0]);
         return EXIT_FAILURE;
@@ -160,15 +195,14 @@ int main(int argc, char *argv[]) {
             getpid(), client_pid, total_distance, local_partida);
     fflush(stdout);
     
-    // 3. Vehicle Arrival and Client Interaction [cite: 451]
+    // 3. Vehicle Arrival and Client Interaction
     if (await_client_entry(local_partida)) {
-        // Client entered. Start the simulation.
         start_trip();
     } else {
-        fprintf(stderr, "VEICULO [%d]: Failed to start trip (client interaction failed).\n", getpid());
+        fprintf(stderr, "VEICULO [%d]: Failed to start trip.\n", getpid());
     }
 
-    // 4. Cleanup and Termination [cite: 456]
+    // 4. Cleanup and Termination
     fprintf(stdout, "TELEMETRY: VEICULO_TERMINATED | Status: Exiting process.\n");
     fflush(stdout);
     
