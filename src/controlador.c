@@ -110,6 +110,8 @@ void cleanup(int signo) {
     pthread_mutex_unlock(&clientes_mutex);
     
     // 1.5. Scan for and remove any leftover FIFOCLIENTE files
+    // Not good in terms of performance but ensures cleanup,
+    // can be disabled if needed.
     printf("[CLEANUP] Scanning for leftover client FIFOs...\n");
     for (int i = 1; i < 100000; i++) { // Check a reasonable range of PIDs
         char client_fifo_name[100];
@@ -125,7 +127,7 @@ void cleanup(int signo) {
 
     // 2. Terminate all running vehicles
     pthread_mutex_lock(&frota_mutex);
-    for (int i = 0; i < MAX_CLIENTES; i++) {
+    for (int i = 0; i < NVEICULOS; i++) {
         if (frota[i].estado == 1 && frota[i].pid_veiculo > 0) {
             printf("[CLEANUP] Terminating vehicle PID %d (Service %d)...\n", 
                    frota[i].pid_veiculo, frota[i].id_servico);
@@ -141,6 +143,22 @@ void cleanup(int signo) {
         }
     }
     pthread_mutex_unlock(&frota_mutex);
+
+    // 2.5. Clean up leftover FIFOVEICULO files
+    // Not good in terms of performance but ensures cleanup,
+    // can be disabled if needed.
+    printf("[CLEANUP] Scanning for leftover vehicle FIFOs...\n");
+    for (int i = 1; i < 100000; i++) { // Check a reasonable range of PIDs
+        char vehicle_fifo_name[100];
+        sprintf(vehicle_fifo_name, "FIFOVEICULO%d", i);
+        
+        // Check if FIFO exists using access()
+        if (access(vehicle_fifo_name, F_OK) == 0) {
+            if (unlink(vehicle_fifo_name) == 0) {
+                printf("[CLEANUP] Removed leftover vehicle FIFO: %s\n", vehicle_fifo_name);
+            }
+        }
+    }
 
     // 3. Clean up server FIFO and file descriptors
     if (fd_servidor_main != -1) {
@@ -304,7 +322,7 @@ void *simulated_time_thread(void *arg) {
         current_simulated_time++;
         
         // **VEHICLE LAUNCH LOGIC**
-        for (int i = 0; i < MAX_CLIENTES; i++) {
+        for (int i = 0; i < NVEICULOS; i++) {
             if (frota[i].estado == 0 && frota[i].hora_inicio == current_simulated_time) {
                 
                 char client_fifo_name[100];
@@ -343,7 +361,7 @@ void *admin_input_thread(void *arg) {
     while (1) {
         printf("Admin> ");
         if (fgets(input, sizeof(input), stdin) == NULL) {
-            break; // EOF
+            break;
         }
 
         // Clean input
@@ -361,7 +379,7 @@ void *admin_input_thread(void *arg) {
             pthread_mutex_lock(&frota_mutex);
             int found = 0;
             
-            for (int i = 0; i < MAX_CLIENTES; i++) {
+            for (int i = 0; i < NVEICULOS; i++) {
                 if (frota[i].estado == 0 || frota[i].estado == 1) {
                     const char *estado_str = (frota[i].estado == 0) ? "SCHEDULED" : "IN PROGRESS";
                     printf(" %d \t| H%d \t| %d \t| %d \t\t| %d \t\t| %s\n",
@@ -389,7 +407,7 @@ void *admin_input_thread(void *arg) {
             pthread_mutex_lock(&frota_mutex);
             int active_vehicles = 0;
 
-            for (int i = 0; i < MAX_CLIENTES; i++) {
+            for (int i = 0; i < NVEICULOS; i++) {
                 if (frota[i].estado == 1 && frota[i].pid_veiculo > 0) { // Only vehicles IN COURSE
                     int percentage = 0;
                     if (frota[i].distancia_total > 0) {
@@ -433,7 +451,7 @@ void *admin_input_thread(void *arg) {
                 if (service_id == 0) {
                     // Cancel ALL services (scheduled AND in progress)
                     printf("[CANCELAR] Cancelling ALL services...\n");
-                    for (int i = 0; i < MAX_CLIENTES; i++) {
+                    for (int i = 0; i < NVEICULOS; i++) {
                         if (frota[i].estado == 0 || frota[i].estado == 1) {
                             // If vehicle is running, terminate it
                             if (frota[i].estado == 1 && frota[i].pid_veiculo > 0) {
@@ -453,7 +471,7 @@ void *admin_input_thread(void *arg) {
                 } else {
                     // Cancel specific service by ID
                     int found = 0;
-                    for (int i = 0; i < MAX_CLIENTES; i++) {
+                    for (int i = 0; i < NVEICULOS; i++) {
                         if (frota[i].id_servico == service_id && 
                             (frota[i].estado == 0 || frota[i].estado == 1)) {
                             
@@ -579,7 +597,7 @@ void *thread_process_message(void *arg) {
                 
                 // Cancel ALL services (scheduled AND in course) for this client
                 int cancelled_count = 0;
-                for (int j = 0; j < MAX_CLIENTES; j++) {
+                for (int j = 0; j < NVEICULOS; j++) {
                     if (frota[j].pid_cliente == msg->pid) {
                         if (frota[j].estado == 0) {
                             // Scheduled service - just free the slot
@@ -641,7 +659,7 @@ void *thread_process_message(void *arg) {
             } else {
                 // Find free service slot (must be called inside lock)
                 ServicoEmCurso *new_service = NULL;
-                for (int i = 0; i < MAX_CLIENTES; i++) {
+                for (int i = 0; i < NVEICULOS; i++) {
                     if (frota[i].estado == 2) { // 2 = Concluded/Free
                         new_service = &frota[i];
                         break;
@@ -679,7 +697,7 @@ void *thread_process_message(void *arg) {
         int found = 0;
         char vehicle_fifo_copy[100] = "";
         
-        for (int i = 0; i < MAX_CLIENTES; i++) {
+        for (int i = 0; i < NVEICULOS; i++) {
             if (frota[i].pid_cliente == msg->pid && frota[i].estado == 1 && frota[i].vehicle_fifo_name[0] != '\0') {
                 // Copy FIFO name while holding lock
                 strncpy(vehicle_fifo_copy, frota[i].vehicle_fifo_name, sizeof(vehicle_fifo_copy));
@@ -735,6 +753,8 @@ int main() {
     srand(time(NULL));
     for (int i = 0; i < MAX_CLIENTES; i++) {
         clientes[i].active = 0;
+    }
+    for (int i = 0; i < NVEICULOS; i++) {
         frota[i].estado = 2; // Concluded/Free
         frota[i].vehicle_fifo_name[0] = '\0'; // Initialize vehicle FIFO name
     }
