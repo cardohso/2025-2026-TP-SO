@@ -49,7 +49,7 @@ typedef struct {
     char vehicle_fifo_name[100]; // FIFO name for client-vehicle direct communication
 } ServicoEmCurso;
 
-ServicoEmCurso frota[MAX_CLIENTES]; 
+ServicoEmCurso frota[NVEICULOS]; 
 int num_servicos_ativos = 0;
 long long int total_km_platform = 0; // Total km counter for the platform
 
@@ -327,13 +327,18 @@ void *simulated_time_thread(void *arg) {
     return NULL;
 }
 
-
 // Thread to read commands from the Administrator (stdin)
 void *admin_input_thread(void *arg) {
     pthread_detach(pthread_self());
     char input[128];
     
-    printf("Admin Console Ready. Use 'listar', 'frota', 'km', 'hora', 'terminar'.\n");
+    printf("Admin Console Ready. Use 'listar', 'frota', 'km', 'hora', 'cancelar', 'terminar'.\n");
+    printf("  listar            - List all scheduled and in-progress services\n");
+    printf("  frota             - Show active fleet monitoring\n");
+    printf("  km                - Show total kilometers done\n");
+    printf("  hora              - Show simulated time\n");
+    printf("  cancelar <id>     - Cancel service by ID (use 0 to cancel all services)\n");
+    printf("  terminar          - Shutdown the server\n");
     
     while (1) {
         printf("Admin> ");
@@ -416,8 +421,65 @@ void *admin_input_thread(void *arg) {
         } else if (strncasecmp(p, "terminar", 8) == 0) {
             // Logic for 'terminar' - Terminate the entire system
             printf("TERMINAR command received. Initiating system shutdown...\n");
-            // ... (full shutdown implementation required here) ...
             cleanup(0);
+        } else if (strncasecmp(p, "cancelar", 8) == 0) {
+            // Logic for 'cancelar <service_id>' - Cancel service(s)
+            // If service_id is 0, cancel ALL services (scheduled and in progress)
+            int service_id;
+            if (sscanf(p, "cancelar %d", &service_id) == 1) {
+                pthread_mutex_lock(&frota_mutex);
+                int cancelled_count = 0;
+                
+                if (service_id == 0) {
+                    // Cancel ALL services (scheduled AND in progress)
+                    printf("[CANCELAR] Cancelling ALL services...\n");
+                    for (int i = 0; i < MAX_CLIENTES; i++) {
+                        if (frota[i].estado == 0 || frota[i].estado == 1) {
+                            // If vehicle is running, terminate it
+                            if (frota[i].estado == 1 && frota[i].pid_veiculo > 0) {
+                                printf("[CANCELAR] Terminating vehicle PID %d (Service ID %d).\n", 
+                                       frota[i].pid_veiculo, frota[i].id_servico);
+                                kill(frota[i].pid_veiculo, SIGTERM);
+                            }
+                            
+                            frota[i].estado = 2; // Mark as concluded
+                            num_servicos_ativos--;
+                            cancelled_count++;
+                            printf("[CANCELAR] Service ID %d cancelled.\n", frota[i].id_servico);
+                        }
+                    }
+                    pthread_mutex_unlock(&frota_mutex);
+                    printf("[CANCELAR] Total services cancelled: %d\n", cancelled_count);
+                } else {
+                    // Cancel specific service by ID
+                    int found = 0;
+                    for (int i = 0; i < MAX_CLIENTES; i++) {
+                        if (frota[i].id_servico == service_id && 
+                            (frota[i].estado == 0 || frota[i].estado == 1)) {
+                            
+                            // If vehicle is running, terminate it
+                            if (frota[i].estado == 1 && frota[i].pid_veiculo > 0) {
+                                printf("[CANCELAR] Terminating vehicle PID %d for service ID %d.\n", 
+                                       frota[i].pid_veiculo, service_id);
+                                kill(frota[i].pid_veiculo, SIGTERM);
+                            }
+                            
+                            frota[i].estado = 2; // Mark as concluded
+                            num_servicos_ativos--;
+                            found = 1;
+                            printf("[CANCELAR] Service ID %d cancelled successfully.\n", service_id);
+                            break;
+                        }
+                    }
+                    pthread_mutex_unlock(&frota_mutex);
+                    
+                    if (!found) {
+                        printf("Service ID %d not found or already concluded.\n", service_id);
+                    }
+                }
+            } else {
+                printf("Invalid format. Use: cancelar <service_id> (use 0 to cancel all)\n");
+            }
         } else if (strlen(p) > 0) {
             printf("Unknown command.\n");
         }
