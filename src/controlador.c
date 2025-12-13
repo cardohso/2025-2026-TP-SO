@@ -24,6 +24,13 @@ pthread_mutex_t clientes_mutex; // Protects the 'clientes' array
 pthread_mutex_t frota_mutex;    // Protects the 'frota' (services) array and simulated time
 pthread_mutex_t console_mutex;  // Protects console output
 
+// --- CRITICAL: Lock Order Policy ---
+// To prevent deadlocks, ALWAYS acquire locks in this order:
+// 1. clientes_mutex (if needed)
+// 2. frota_mutex (if needed)
+// NEVER acquire frota_mutex then clientes_mutex in the same operation.
+// NEVER hold multiple locks longer than necessary.
+
 // --- Simulated Time Control ---
 int current_simulated_time = 0;
 
@@ -457,7 +464,7 @@ void *admin_input_thread(void *arg) {
                             if (frota[i].estado == 1 && frota[i].pid_veiculo > 0) {
                                 printf("[CANCELAR] Terminating vehicle PID %d (Service ID %d).\n", 
                                        frota[i].pid_veiculo, frota[i].id_servico);
-                                kill(frota[i].pid_veiculo, SIGTERM);
+                                kill(frota[i].pid_veiculo, SIGUSR1);
                             }
                             
                             frota[i].estado = 2; // Mark as concluded
@@ -581,7 +588,6 @@ void *thread_process_message(void *arg) {
     }
     
     if (strcmp(msg->comando, "terminar") == 0) {
-        // CRITICAL: Lock order is clientes_mutex THEN frota_mutex
         pthread_mutex_lock(&clientes_mutex);
         pthread_mutex_lock(&frota_mutex);
         
@@ -642,7 +648,8 @@ void *thread_process_message(void *arg) {
         
         if (sscanf(msg->msg, "%s %s %s", hora_str, local, distancia_str) == 3) {
             
-            // CRITICAL: Lock order is clientes_mutex THEN frota_mutex (if needed)
+            // CRITICAL: Lock order is frota_mutex ONLY (no client access needed)
+            // Client info already available from msg->pid and msg->param2
             pthread_mutex_lock(&frota_mutex);
             
             int requested_hour = atoi(hora_str);
@@ -689,8 +696,8 @@ void *thread_process_message(void *arg) {
         } else {
              send_client_response(msg->pid, "ERROR: Incomplete scheduling data.");
         }
-    } else if (strcmp(msg->comando, "entrar") == 0 || strcmp(msg->comando, "sair") == 0) {
-        // Find the active service for this client
+    } else if (strcmp(msg->comando, "entrar") == 0) {
+        // Handle client entry into vehicle
         // Only need frota_mutex here (no client info access)
         pthread_mutex_lock(&frota_mutex);
         
@@ -719,6 +726,50 @@ void *thread_process_message(void *arg) {
             }
         } else {
             send_client_response(msg->pid, "ERROR: No active vehicle waiting for your command.");
+        }
+    } else if (strcmp(msg->comando, "sair") == 0) {
+        // Handle client exit from vehicle during trip
+        // Need to: (1) send message to vehicle, (2) mark service as concluded
+        pthread_mutex_lock(&frota_mutex);
+        
+        int found = 0;
+        char vehicle_fifo_copy[100] = "";
+        int service_index = -1;
+        
+        for (int i = 0; i < NVEICULOS; i++) {
+            if (frota[i].pid_cliente == msg->pid && frota[i].estado == 1 && frota[i].vehicle_fifo_name[0] != '\0') {
+                // Copy FIFO name while holding lock
+                strncpy(vehicle_fifo_copy, frota[i].vehicle_fifo_name, sizeof(vehicle_fifo_copy));
+                service_index = i;
+                found = 1;
+                break;
+            }
+        }
+        
+        // If found, mark the service as concluded immediately
+        if (found && service_index >= 0) {
+            frota[service_index].estado = 2; // Concluded/Free
+            num_servicos_ativos--;
+            printf("[SAIR] Service %d cancelled by client exit. Slot now free.\n", frota[service_index].id_servico);
+        }
+        
+        pthread_mutex_unlock(&frota_mutex);
+        
+        // Perform I/O operations OUTSIDE the lock to avoid blocking other threads
+        if (found) {
+            int fd_vehicle = open(vehicle_fifo_copy, O_WRONLY | O_NONBLOCK);
+            if (fd_vehicle != -1) {
+                write(fd_vehicle, msg, sizeof(MensagemT));
+                close(fd_vehicle);
+                send_client_response(msg->pid, "Vehicle exit request sent. Service cancelled.");
+            } else {
+                send_client_response(msg->pid, "ERROR: Cannot communicate with vehicle.");
+            }
+            
+            // Remove the vehicle FIFO
+            unlink(vehicle_fifo_copy);
+        } else {
+            send_client_response(msg->pid, "ERROR: No active vehicle to exit from.");
         }
     } else {
         // Handle consultar, cancelar, other commands...

@@ -245,8 +245,8 @@ int main(int argc, char *argv[]){
     char input[128];
 
     // 6. Main Loop (Command sending)
+    print_menu();
     for(;;){
-        print_menu();
         printf("Opção> ");
         if(!fgets(input, sizeof input, stdin)){
             putchar('\n');
