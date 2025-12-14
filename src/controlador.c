@@ -24,13 +24,6 @@ pthread_mutex_t clientes_mutex; // Protects the 'clientes' array
 pthread_mutex_t frota_mutex;    // Protects the 'frota' (services) array and simulated time
 pthread_mutex_t console_mutex;  // Protects console output
 
-// --- CRITICAL: Lock Order Policy ---
-// To prevent deadlocks, ALWAYS acquire locks in this order:
-// 1. clientes_mutex (if needed)
-// 2. frota_mutex (if needed)
-// NEVER acquire frota_mutex then clientes_mutex in the same operation.
-// NEVER hold multiple locks longer than necessary.
-
 // --- Simulated Time Control ---
 int current_simulated_time = 0;
 
@@ -224,11 +217,57 @@ void *monitor_veiculo_thread(void *arg) {
         
         // **LOGIC TO UPDATE SERVICE STATE AND km HERE**
         if (strstr(buffer, "PROGRESS") != NULL) {
-            // Update km_percorridos in the global structure
-            // ...
-            
-        } else if (strstr(buffer, "VEICULO_TERMINATED") != NULL || strstr(buffer, "SERVICE_CANCELLED") != NULL) {
-            printf("[MONITOR %d] Vehicle terminated or cancelled.\n", servico_id);
+            // Extract km_percorridos from PROGRESS message: "TELEMETRY: PROGRESS | %_completed: X | Dist_km: Y/Z"
+            int km_done = 0, total_km = 0;
+            if (sscanf(buffer, "%*[^|]| %%_completed: %*d | Dist_km: %d/%d", &km_done, &total_km) == 2) {
+                pthread_mutex_lock(&frota_mutex);
+                int km_increment = km_done - servico->km_percorridos; // Calculate how many km were added
+                servico->km_percorridos = km_done;
+                if (km_increment > 0) {
+                    total_km_platform += km_increment; // Add the increment to total
+                }
+                pthread_mutex_unlock(&frota_mutex);
+            }
+        } else if (strstr(buffer, "SERVICE_FINISHED") != NULL) {
+            // Service completed successfully - add km to total
+            pthread_mutex_lock(&frota_mutex);
+            total_km_platform += servico->km_percorridos;
+            printf("[MONITOR %d] Service finished. Added %d km. Total platform km: %lld\n", 
+                   servico_id, servico->km_percorridos, total_km_platform);
+            pthread_mutex_unlock(&frota_mutex);
+        } else if (strstr(buffer, "TRIP_INTERRUPTED") != NULL) {
+            // Trip was interrupted - extract and save km done
+            int km_done = 0, total_km = 0;
+            if (sscanf(buffer, "%*[^|]| Dist_km_done: %d/%d", &km_done, &total_km) == 2) {
+                pthread_mutex_lock(&frota_mutex);
+                servico->km_percorridos = km_done;
+                total_km_platform += km_done;
+                printf("[MONITOR %d] Trip interrupted. Added %d km. Total platform km: %lld\n", 
+                       servico_id, km_done, total_km_platform);
+                pthread_mutex_unlock(&frota_mutex);
+            }
+        } else if (strstr(buffer, "SERVICE_CANCELLED") != NULL) {
+            // Service cancelled by controller - add km done to total
+            int km_done = 0;
+            if (sscanf(buffer, "%*[^|]| Dist_km: %d/%*d", &km_done) == 1) {
+                pthread_mutex_lock(&frota_mutex);
+                total_km_platform += km_done;
+                printf("[MONITOR %d] Service cancelled. Added %d km. Total platform km: %lld\n", 
+                       servico_id, km_done, total_km_platform);
+                pthread_mutex_unlock(&frota_mutex);
+            }
+        } else if (strstr(buffer, "CLIENT_EXIT_DURING_TRIP") != NULL) {
+            // Client exited during trip - mark service as cancelled
+            printf("[MONITOR %d] Client exited during trip. Cancelling service.\n", servico_id);
+            pthread_mutex_lock(&frota_mutex);
+            servico->estado = 2; // Mark as concluded/cancelled
+            num_servicos_ativos--;
+            pthread_mutex_unlock(&frota_mutex);
+            break;
+        } else if (strstr(buffer, "VEICULO_TERMINATED") != NULL) {
+            // Vehicle terminated - km should already be accumulated during PROGRESS messages
+            // Just log the termination
+            printf("[MONITOR %d] Vehicle terminated.\n", servico_id);
             break;
         }
     }

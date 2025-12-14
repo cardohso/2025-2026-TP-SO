@@ -16,6 +16,7 @@
 
 // Global variables for pipe management
 char CLIENT_FIFO_FINAL[100];
+char vehicle_fifo_name[100] = ""; // FIFO name for direct communication with vehicle
 pthread_t receive_thread_id; 
 int fdServidor = -1; // Global FD for the Server's FIFO
 
@@ -134,6 +135,18 @@ void *receive_thread(void *arg) {
         ssize_t bytes_read = read(fd_cliente, &msg, sizeof(MensagemT));
         
         if (bytes_read > 0) {
+            // Extract vehicle FIFO name if message contains VEHICLE_READY
+            if (strstr(msg.msg, "VEHICLE_READY:") != NULL) {
+                char *fifo_ptr = strstr(msg.msg, "FIFOVEICULO");
+                if (fifo_ptr) {
+                    sscanf(fifo_ptr, "%s", vehicle_fifo_name);
+                    // Remove any trailing punctuation (period, etc)
+                    char *period = strchr(vehicle_fifo_name, '.');
+                    if (period) *period = '\0';
+                    printf("[INFO] Stored vehicle FIFO: %s\n", vehicle_fifo_name);
+                }
+            }
+
             printf("\n[Server/Vehicle]: %s\n", msg.msg);
 
             // Exit if login failed or if server forces disconnection
