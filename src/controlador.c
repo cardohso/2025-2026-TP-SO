@@ -392,11 +392,12 @@ void *admin_input_thread(void *arg) {
     pthread_detach(pthread_self());
     char input[128];
     
-    printf("Admin Console Ready. Use 'listar', 'frota', 'km', 'hora', 'cancelar', 'terminar'.\n");
+    printf("Admin Console Ready. Use 'listar', 'frota', 'km', 'hora', 'utiliz', 'cancelar', 'terminar'.\n");
     printf("  listar            - List all scheduled and in-progress services\n");
     printf("  frota             - Show active fleet monitoring\n");
     printf("  km                - Show total kilometers done\n");
     printf("  hora              - Show simulated time\n");
+    printf("  utiliz            - List connected users (waiting for vehicle / in trip)\n");
     printf("  cancelar <id>     - Cancel service by ID (use 0 to cancel all services)\n");
     printf("  terminar          - Shutdown the server\n");
     
@@ -476,6 +477,49 @@ void *admin_input_thread(void *arg) {
             printf("Total km Done: %lld km\n", total_km_platform);
         } else if (strncasecmp(p, "hora", 4) == 0) {
             printf("Simulated Time: %d seconds\n", current_simulated_time);
+        } else if (strncasecmp(p, "utiliz", 6) == 0) {
+            // Show connected users with their status
+            printf("\n--- CONNECTED USERS ---\n");
+            printf(" USERNAME \t| PID \t| STATUS\n");
+            printf("---------------------------------------------\n");
+            
+            pthread_mutex_lock(&clientes_mutex);
+            pthread_mutex_lock(&frota_mutex);
+            
+            int active_users = 0;
+            for (int i = 0; i < MAX_CLIENTES; i++) {
+                if (clientes[i].active) {
+                    active_users++;
+                    
+                    // Determine status: "Waiting for vehicle" or "In trip"
+                    const char *status = "Idle";
+                    
+                    // Check if user has any scheduled or in-progress service
+                    for (int j = 0; j < NVEICULOS; j++) {
+                        if (frota[j].pid_cliente == clientes[i].pid) {
+                            if (frota[j].estado == 0) {
+                                status = "Waiting for vehicle";
+                                break;
+                            } else if (frota[j].estado == 1) {
+                                status = "In trip";
+                                break;
+                            }
+                        }
+                    }
+                    
+                    printf(" %s \t| %d \t| %s\n", 
+                           clientes[i].username, 
+                           clientes[i].pid, 
+                           status);
+                }
+            }
+            
+            if (active_users == 0) {
+                printf("No users connected.\n");
+            }
+            pthread_mutex_unlock(&frota_mutex);
+            pthread_mutex_unlock(&clientes_mutex);
+            printf("---------------------------------------------\n");
         } else if (strncasecmp(p, "terminar", 8) == 0) {
             printf("TERMINAR command received. Initiating system shutdown...\n");
             cleanup(0);
