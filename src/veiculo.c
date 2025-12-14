@@ -41,8 +41,6 @@ void handle_sigusr1(int sig) {
     exit(EXIT_SUCCESS); 
 }
 
-// --- Support Functions ---
-
 // Wrapper to send a message to the client's FIFO
 void send_client_response(pid_t target_pid, const char *fifo_name, const char *message) {
     // The client is expected to have its FIFO open for reading.
@@ -80,7 +78,6 @@ int await_client_entry(const char *local_partida) {
     // 2. Open the SERVER FIFO to read client's command
     // The controller should redirect the client's entrar/sair command to us
     // For direct communication, we'll read from a dedicated pipe or wait for signal
-    // ALTERNATIVE: Create a temporary FIFO for vehicle-client direct communication
     
     char vehicle_fifo_name[100];
     sprintf(vehicle_fifo_name, "FIFOVEICULO%d", getpid());

@@ -15,10 +15,6 @@
 
 #include "../include/common.h"
 
-// =========================================================
-// GLOBAL STATE AND SYNCHRONIZATION VARIABLES
-// =========================================================
-
 // --- Mutexes ---
 pthread_mutex_t clientes_mutex; // Protects the 'clientes' array
 pthread_mutex_t frota_mutex;    // Protects the 'frota' (services) array and simulated time
@@ -36,9 +32,9 @@ typedef struct {
 ClienteInfo clientes[MAX_CLIENTES];
 
 // --- Fleet and Service Management ---
-// NOTE: This structure is used to manage both scheduled and running services.
+// This structure is used to manage both scheduled and running services.
 typedef struct {
-    int id_servico; // Unique Service ID
+    int id_servico;
     pid_t pid_cliente;
     pid_t pid_veiculo;  // PID of the running vehicle process
     int hora_inicio;    // Scheduled hour (simulated time)
@@ -215,7 +211,7 @@ void *monitor_veiculo_thread(void *arg) {
         
         printf("--- Telemetry [%d] --- %s\n", servico_id, buffer);
         
-        // **LOGIC TO UPDATE SERVICE STATE AND km HERE**
+            // Parse telemetry messages for km updates
         if (strstr(buffer, "PROGRESS") != NULL) {
             // Extract km_percorridos from PROGRESS message: "TELEMETRY: PROGRESS | %_completed: X | Dist_km: Y/Z"
             int km_done = 0, total_km = 0;
@@ -272,7 +268,7 @@ void *monitor_veiculo_thread(void *arg) {
         }
     }
     
-    // Wait for the Vehicle process to finish (reap the child)
+    // Wait for the Vehicle process to finish
     int status;
     waitpid(vehicle_pid, &status, 0);
     
@@ -477,17 +473,13 @@ void *admin_input_thread(void *arg) {
             pthread_mutex_unlock(&frota_mutex);
             printf("-----------------------------------------------------\n");
         } else if (strncasecmp(p, "km", 2) == 0) {
-            // Logic for 'km' - Show total kilometers
             printf("Total km Done: %lld km\n", total_km_platform);
         } else if (strncasecmp(p, "hora", 4) == 0) {
-            // Logic for 'hora' - Show simulated time
             printf("Simulated Time: %d seconds\n", current_simulated_time);
         } else if (strncasecmp(p, "terminar", 8) == 0) {
-            // Logic for 'terminar' - Terminate the entire system
             printf("TERMINAR command received. Initiating system shutdown...\n");
             cleanup(0);
         } else if (strncasecmp(p, "cancelar", 8) == 0) {
-            // Logic for 'cancelar <service_id>' - Cancel service(s)
             // If service_id is 0, cancel ALL services (scheduled and in progress)
             int service_id;
             if (sscanf(p, "cancelar %d", &service_id) == 1) {
